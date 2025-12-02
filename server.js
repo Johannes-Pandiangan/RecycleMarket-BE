@@ -16,8 +16,7 @@ const app = express();
 
 // Middleware Utama
 app.use(cors({
-    // Sesuaikan ini dengan port frontend Anda (default Vite: 5173 atau 3000)
-    origin: 'http://localhost:3000', 
+    origin: 'https://recycle-market-fe.vercel.app', 
     methods: ['GET', 'POST', 'PUT', 'DELETE'],
     credentials: true
 }));
@@ -50,5 +49,6 @@ const start = async () => {
     console.log(`Server berjalan di http://localhost:${PORT} (${process.env.NODE_ENV || 'development'})`);
   });
 };
+
 
 start();
