@@ -14,6 +14,7 @@ const generateToken = (id) => {
 // @desc    Daftar Admin baru
 // @route   POST /api/auth/register
 export const registerAdmin = async (req, res) => {
+  // is_super_admin tidak boleh dikirim dari frontend, defaultnya FALSE
   const { name, email, phone, location, password } = req.body;
 
   try {
@@ -27,9 +28,9 @@ export const registerAdmin = async (req, res) => {
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
 
-    // 3. Simpan Admin baru
+    // 3. Simpan Admin baru (default is_super_admin = FALSE)
     const result = await query(
-      'INSERT INTO admins (name, email, phone, location, password) VALUES ($1, $2, $3, $4, $5) RETURNING id, name, email, phone, location',
+      'INSERT INTO admins (name, email, phone, location, password) VALUES ($1, $2, $3, $4, $5) RETURNING id, name, email, phone, location, is_super_admin',
       [name, email, phone, location, hashedPassword]
     );
 
@@ -42,6 +43,7 @@ export const registerAdmin = async (req, res) => {
       email: admin.email,
       phone: admin.phone,
       location: admin.location,
+      isSuperAdmin: admin.is_super_admin, // BARU
       token: generateToken(admin.id),
     });
 
@@ -69,6 +71,7 @@ export const loginAdmin = async (req, res) => {
         email: admin.email,
         phone: admin.phone,
         location: admin.location,
+        isSuperAdmin: admin.is_super_admin, // BARU
         token: generateToken(admin.id),
       });
     } else {
@@ -79,4 +82,52 @@ export const loginAdmin = async (req, res) => {
     console.error('Error during login:', error);
     res.status(500).json({ message: 'Server error' });
   }
+};
+
+// @desc    Mendapatkan semua Admin/Seller (Super Admin Only)
+// @route   GET /api/auth/admins
+export const getAllAdmins = async (req, res) => {
+    // Middleware superAdminProtect sudah memastikan yang akses adalah Super Admin
+    try {
+        // Ambil semua admin/seller dari tabel admins
+        const result = await query('SELECT id, name, email, phone, location, is_super_admin FROM admins ORDER BY id ASC');
+        res.json(result.rows.map(admin => ({
+            id: admin.id,
+            name: admin.name,
+            email: admin.email,
+            phone: admin.phone,
+            location: admin.location,
+            isSuperAdmin: admin.is_super_admin,
+            // createdAt tidak perlu karena kolom tersebut tidak ada di tabel admins awal
+        })));
+    } catch (error) {
+        console.error('Error getting all admins:', error);
+        res.status(500).json({ message: 'Server error' });
+    }
+};
+
+// @desc    Menghapus Admin/Seller (Super Admin Only)
+// @route   DELETE /api/auth/admins/:id
+export const deleteAdmin = async (req, res) => {
+    const { id } = req.params;
+    const adminIdToDelete = parseInt(id);
+
+    try {
+        // Mencegah Super Admin menghapus dirinya sendiri
+        if (req.admin.id === adminIdToDelete) {
+             return res.status(400).json({ message: 'Tidak dapat menghapus akun Anda sendiri' });
+        }
+        
+        // Hapus Admin dari tabel admins
+        const result = await query('DELETE FROM admins WHERE id = $1 RETURNING id', [adminIdToDelete]);
+
+        if (result.rowCount === 0) {
+            return res.status(404).json({ message: 'Admin tidak ditemukan' });
+        }
+
+        res.status(204).end(); // 204 No Content for successful deletion
+    } catch (error) {
+        console.error('Error deleting admin:', error);
+        res.status(500).json({ message: 'Server error' });
+    }
 };

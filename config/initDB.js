@@ -10,7 +10,8 @@ export const createTables = async () => {
       email VARCHAR(100) UNIQUE NOT NULL,
       phone VARCHAR(20),
       location VARCHAR(100),
-      password VARCHAR(255) NOT NULL
+      password VARCHAR(255) NOT NULL,
+      is_super_admin BOOLEAN DEFAULT FALSE
     );
   `;
 
@@ -40,11 +41,12 @@ export const createTables = async () => {
     if (res.rowCount === 0) {
         const hashedPassword = await bcrypt.hash('123456', 10); 
         const dummyAdmin = `
-            INSERT INTO admins (name, email, phone, location, password)
-            VALUES ($1, $2, $3, $4, $5) RETURNING *;
+            INSERT INTO admins (name, email, phone, location, password, is_super_admin)
+            VALUES ($1, $2, $3, $4, $5, $6) RETURNING *;
         `;
-        await query(dummyAdmin, ['Admin Test', 'admin@test.com', '081234567890', 'Jakarta', hashedPassword]);
-        console.log("Dummy admin ('admin@test.com', pass: '123456') ditambahkan.");
+        // Set dummy admin sebagai Super Admin
+        await query(dummyAdmin, ['Super Admin', 'admin@test.com', '081234567890', 'Jakarta', hashedPassword, true]); 
+        console.log("Dummy admin ('admin@test.com', pass: '123456') ditambahkan sebagai Super Admin.");
     }
     
   } catch (err) {
