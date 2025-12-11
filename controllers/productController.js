@@ -2,7 +2,8 @@ import { query } from '../config/db.js';
 import cloudinary from '../config/cloudinaryConfig.js';
 
 const getAdminDetails = async (adminId) => {
-    const res = await query('SELECT name, phone, location FROM admins WHERE id = $1', [adminId]);
+    // Sertakan is_super_admin
+    const res = await query('SELECT name, phone, location, is_super_admin FROM admins WHERE id = $1', [adminId]);
     return res.rows[0];
 }
 const formatProductResponse = async (product) => {
@@ -20,8 +21,26 @@ const formatProductResponse = async (product) => {
         sellerName: adminDetails.name,
         sellerPhone: adminDetails.phone,
         location: adminDetails.location,
+        isSuperAdmin: adminDetails.is_super_admin, // BARU
     };
 };
+// Helper untuk format respons produk tanpa memuat ulang detail admin jika sudah tersedia
+const formatProductResponseSimple = (product, adminData) => ({
+    id: product.id,
+    name: product.name,
+    description: product.description,
+    price: product.price,
+    image: product.image,
+    stock: product.stock,
+    status: product.status,
+    createdAt: product.created_at,
+    adminId: product.admin_id.toString(), 
+    sellerName: adminData.name,
+    sellerPhone: adminData.phone,
+    location: adminData.location,
+    isSuperAdmin: adminData.is_super_admin, // BARU
+});
+
 
 // @desc    Mendapatkan semua produk yang tersedia (untuk halaman Home)
 // @route   GET /api/products/available
@@ -29,6 +48,7 @@ export const getAvailableProducts = async (req, res) => {
   try {
     const result = await query('SELECT * FROM products WHERE stock > 0 ORDER BY created_at DESC');
     
+    // NOTE: Ini akan memanggil getAdminDetails berkali-kali. Bisa dioptimasi tapi biarkan dulu untuk menjaga struktur.
     const formattedProducts = await Promise.all(result.rows.map(formatProductResponse));
     
     res.json(formattedProducts);
@@ -49,20 +69,7 @@ export const getMyProducts = async (req, res) => {
     
     // Gunakan data admin yang sudah ada di req.admin untuk efisiensi
     const adminData = req.admin;
-    const formattedProducts = result.rows.map(product => ({
-        id: product.id,
-        name: product.name,
-        description: product.description,
-        price: product.price,
-        image: product.image,
-        stock: product.stock,
-        status: product.status,
-        createdAt: product.created_at,
-        adminId: product.admin_id.toString(), 
-        sellerName: adminData.name,
-        sellerPhone: adminData.phone,
-        location: adminData.location,
-    }));
+    const formattedProducts = result.rows.map(product => formatProductResponseSimple(product, adminData));
     
     res.json(formattedProducts);
   } catch (error) {
@@ -70,6 +77,24 @@ export const getMyProducts = async (req, res) => {
     res.status(500).json({ message: 'Server error' });
   }
 };
+
+// @desc    Mendapatkan SEMUA produk (Super Admin Only)
+// @route   GET /api/products/all
+// @access  Private (Super Admin Only)
+export const getAllProducts = async (req, res) => {
+    try {
+        const result = await query('SELECT * FROM products ORDER BY created_at DESC');
+        
+        // Perlu mendapatkan detail admin untuk setiap produk
+        const formattedProducts = await Promise.all(result.rows.map(formatProductResponse));
+        
+        res.json(formattedProducts);
+    } catch (error) {
+        console.error('Error getting all products for Super Admin:', error);
+        res.status(500).json({ message: 'Server error' });
+    }
+};
+
 
 // @desc    Menambah produk baru
 // @route   POST /api/products
@@ -108,7 +133,7 @@ export const addProduct = async (req, res) => {
       `;
       const result = await query(insertQuery, [adminId, name, description, price, imageUrl, initialStock, status]);
       
-      const newProduct = await formatProductResponse(result.rows[0]);
+      const newProduct = formatProductResponseSimple(result.rows[0], req.admin);
       
       res.status(201).json(newProduct);
   } catch (error) {
@@ -150,7 +175,7 @@ export const updateProduct = async (req, res) => {
       }
       
       // Menggunakan nilai baru, atau nilai lama jika tidak ada di request
-      const newStock = parseInt(stock) !== undefined ? parseInt(stock) : currentProduct.stock;
+      const newStock = stock !== undefined ? parseInt(stock) : currentProduct.stock;
       const newStatus = newStock > 0 ? "Tersedia" : "Terjual";
 
       const updateQuery = `
@@ -170,7 +195,7 @@ export const updateProduct = async (req, res) => {
           adminId
       ]);
       
-      const updatedProduct = await formatProductResponse(result.rows[0]);
+      const updatedProduct = formatProductResponseSimple(result.rows[0], req.admin);
       
       res.json(updatedProduct);
   } catch (error) {
@@ -181,19 +206,38 @@ export const updateProduct = async (req, res) => {
 
 // @desc    Menghapus produk
 // @route   DELETE /api/products/:id
-// @access  Private (Admin Only)
+// @access  Private (Admin Only / Super Admin Only if deleting others' product)
+// Note: Karena rute ini sudah dilindungi oleh `protect`, kita hanya perlu cek apakah admin_id cocok atau user adalah super admin.
 export const deleteProduct = async (req, res) => {
   const { id } = req.params;
   const adminId = req.admin.id;
-
+  const isSuperAdmin = req.admin.is_super_admin;
+  
   try {
-    const result = await query('DELETE FROM products WHERE id = $1 AND admin_id = $2 RETURNING id', [id, adminId]);
+      // Cek kepemilikan produk untuk user biasa
+      const checkProductRes = await query('SELECT admin_id FROM products WHERE id = $1', [id]);
+      
+      if (checkProductRes.rowCount === 0) {
+          return res.status(404).json({ message: 'Produk tidak ditemukan' });
+      }
+      
+      const productAdminId = checkProductRes.rows[0].admin_id;
+      
+      // Jika bukan Super Admin dan bukan pemilik produk, tolak akses
+      if (!isSuperAdmin && productAdminId !== adminId) {
+          return res.status(403).json({ message: 'Akses Ditolak: Anda hanya dapat menghapus produk Anda sendiri' });
+      }
 
+    // Hapus produk
+    const result = await query('DELETE FROM products WHERE id = $1 RETURNING id', [id]);
+
+    // Jika Super Admin menghapus produk seller lain, tidak perlu cek `admin_id` di klausa WHERE, 
+    // cukup pastikan produk ada dan hapus. Logika di atas sudah menangani otorisasi.
     if (result.rowCount === 0) {
-      return res.status(404).json({ message: 'Produk tidak ditemukan atau Anda tidak memiliki izin untuk menghapus' });
+      return res.status(404).json({ message: 'Produk tidak ditemukan' });
     }
 
-    res.json({ message: 'Produk berhasil dihapus', id: result.rows[0].id });
+    res.status(204).end(); // 204 No Content for successful deletion
   } catch (error) {
     console.error('Error deleting product:', error);
     res.status(500).json({ message: 'Server error' });
